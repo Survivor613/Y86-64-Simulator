@@ -1,0 +1,5 @@
+{
+  "name": "Y86-64 Visualizer",
+  "description": "A futuristic, interactive visualization interface for the Y86-64 instruction set simulator.",
+  "requestFramePermissions": []
+}
