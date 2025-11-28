@@ -4,9 +4,10 @@ import { clsx } from 'clsx';
 interface CodeViewerProps {
   code: string;
   currentPc: number;
+  onLineClick: (address: number) => void;
 }
 
-const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc }) => {
+const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc, onLineClick }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lines = code.split('\n');
 
@@ -47,17 +48,23 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc }) => {
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:20px_20px] pointer-events-none"></div>
 
         {lines.map((line, idx) => {
-           const isAddress = line.trim().startsWith("0x");
+           // Parse address for click functionality
+           const match = line.match(/^\s*0x([0-9a-fA-F]+):/);
+           const address = match ? parseInt(match[1], 16) : null;
+           const isAddress = address !== null;
+           
            const isActive = idx === activeLineIndex;
 
            return (
             <div 
               key={idx} 
+              onClick={() => isAddress && address !== null && onLineClick(address)}
               className={clsx(
                 "relative pl-3 pr-4 py-1.5 rounded-r-md transition-all duration-300 border-l-[3px]",
                 isActive 
                   ? "bg-gradient-to-r from-neon-blue/20 to-transparent border-neon-blue shadow-[0_0_15px_rgba(45,226,230,0.1)] z-10 scale-[1.01] origin-left" 
-                  : "border-transparent text-gray-600 hover:bg-white/5 hover:text-gray-400"
+                  : "border-transparent text-gray-600 hover:bg-white/5 hover:text-gray-400",
+                isAddress && !isActive && "cursor-pointer hover:border-l-white/20"
               )}
             >
               {/* Active Line Shimmer Bar */}

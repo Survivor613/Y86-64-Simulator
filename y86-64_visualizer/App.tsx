@@ -78,6 +78,18 @@ function App() {
     }
   };
 
+  const handleJumpToAddress = (address: number) => {
+    if (!simulationData) return;
+    
+    // Find the first step where the PC matches the clicked address
+    const targetIndex = simulationData.steps.findIndex(step => step.PC === address);
+    
+    if (targetIndex !== -1) {
+      setIsPlaying(false);
+      setCurrentStepIndex(targetIndex);
+    }
+  };
+
   // Playback Loop
   useEffect(() => {
     if (isPlaying && currentStepIndex < totalSteps - 1) {
@@ -266,7 +278,11 @@ function App() {
 
             {/* CENTER COL: CODE VIEW (6/12) */}
             <div className="lg:col-span-6 h-full flex flex-col">
-               <CodeViewer code={simulationData.sourceCode} currentPc={currentStepData?.PC || 0} />
+               <CodeViewer 
+                 code={simulationData.sourceCode} 
+                 currentPc={currentStepData?.PC || 0} 
+                 onLineClick={handleJumpToAddress}
+               />
             </div>
 
             {/* RIGHT COL: MEMORY (3/12) */}
@@ -338,7 +354,8 @@ function App() {
                         <Activity size={18} />
                      </button>
                      {/* Speed Popup */}
-                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 hidden group-hover:flex flex-col bg-[#1a1f2e] border border-white/10 rounded-lg p-1 shadow-xl">
+                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 pb-4 hidden group-hover:flex flex-col z-50">
+                       <div className="bg-[#1a1f2e] border border-white/10 rounded-lg p-1 shadow-xl flex flex-col">
                         {[1000, 500, 200, 50].map((speed) => (
                            <button 
                              key={speed}
@@ -351,6 +368,7 @@ function App() {
                               {speed === 1000 ? 'SLOW' : speed === 500 ? 'NORM' : speed === 200 ? 'FAST' : 'TURBO'}
                            </button>
                         ))}
+                       </div>
                      </div>
                   </div>
               </div>
