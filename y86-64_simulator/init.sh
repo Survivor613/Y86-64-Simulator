@@ -11,6 +11,6 @@
 # ./test_cpu
 
 # g++ -g -O0 -std=c++17 src/main.cpp src/register.cpp src/memory.cpp src/loader.cpp src/cpu.cpp -Iinclude -o y86-64_simulator
-# mkdir -p temp_answer
+mkdir -p temp_answer
 # ./y86-64_simulator < test/prog1.yo > temp_answer/prog1.json
 # diff answer/prog1.json temp_answer/prog1.json

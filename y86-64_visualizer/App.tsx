@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipBack, SkipForward, RotateCcw, Cpu, Box, Activity, Layers, Monitor, HardDrive, Disc } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, RotateCcw, Cpu, Box, Activity, Layers, Monitor, HardDrive, Disc, Zap } from 'lucide-react';
 import FileUpload from './components/FileUpload';
 import RegisterCard from './components/RegisterCard';
 import CodeViewer from './components/CodeViewer';
@@ -15,9 +15,10 @@ function App() {
   const [simulationData, setSimulationData] = useState<SimulationResult | null>(null);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(200);
+  const [playbackSpeed, setPlaybackSpeed] = useState(500); // Default to Normal (500ms)
   const [isLoading, setIsLoading] = useState(false);
   const [fileName, setFileName] = useState<string>("");
+  const [isSpeedMenuOpen, setIsSpeedMenuOpen] = useState(false);
   
   // Refs
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -38,13 +39,15 @@ function App() {
     setIsLoading(true);
     setFileName(file.name);
     try {
+      // Small artificial delay to show off the loader animation
+      await new Promise(resolve => setTimeout(resolve, 800));
       const result = await runSimulation(file);
       setSimulationData(result);
       setCurrentStepIndex(0); // Start at Step 0 (Initial State)
       setIsPlaying(false);
     } catch (err) {
       console.error("Simulation failed", err);
-      alert("Failed to run simulation");
+      alert("Failed to run simulation. Please check the .yo file format.");
     } finally {
       setIsLoading(false);
     }
@@ -78,15 +81,17 @@ function App() {
     }
   };
 
-  const handleJumpToAddress = (address: number) => {
+  // Jump to specific line based on PC address
+  const handleLineClick = (address: number) => {
     if (!simulationData) return;
     
-    // Find the first step where the PC matches the clicked address
-    const targetIndex = simulationData.steps.findIndex(step => step.PC === address);
+    // Find the *first* step where PC matches the clicked address
+    // We search from the beginning to find the entry point of that instruction
+    const stepIndex = simulationData.steps.findIndex(step => step.PC === address);
     
-    if (targetIndex !== -1) {
+    if (stepIndex !== -1) {
       setIsPlaying(false);
-      setCurrentStepIndex(targetIndex);
+      setCurrentStepIndex(stepIndex);
     }
   };
 
@@ -279,9 +284,9 @@ function App() {
             {/* CENTER COL: CODE VIEW (6/12) */}
             <div className="lg:col-span-6 h-full flex flex-col">
                <CodeViewer 
-                 code={simulationData.sourceCode} 
-                 currentPc={currentStepData?.PC || 0} 
-                 onLineClick={handleJumpToAddress}
+                  code={simulationData.sourceCode} 
+                  currentPc={currentStepData?.PC || 0} 
+                  onLineClick={handleLineClick}
                />
             </div>
 
@@ -349,27 +354,37 @@ function App() {
                   </button>
 
                   {/* Speed Dial */}
-                  <div className="relative group ml-2">
-                     <button className="p-3 rounded-full bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border border-white/5 transition-colors">
-                        <Activity size={18} />
+                  <div className="relative ml-2">
+                     <button 
+                        onClick={() => setIsSpeedMenuOpen(!isSpeedMenuOpen)}
+                        className={clsx(
+                          "p-3 rounded-full transition-colors border border-white/5",
+                          isSpeedMenuOpen ? "bg-neon-cyan/20 text-neon-cyan border-neon-cyan/30" : "bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white"
+                        )}
+                     >
+                        <Zap size={18} fill={isSpeedMenuOpen ? "currentColor" : "none"} />
                      </button>
+                     
                      {/* Speed Popup */}
-                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 pb-4 hidden group-hover:flex flex-col z-50">
-                       <div className="bg-[#1a1f2e] border border-white/10 rounded-lg p-1 shadow-xl flex flex-col">
-                        {[1000, 500, 200, 50].map((speed) => (
-                           <button 
-                             key={speed}
-                             onClick={() => setPlaybackSpeed(speed)}
-                             className={clsx(
-                               "px-3 py-1 text-[10px] font-mono hover:bg-white/10 rounded transition-colors whitespace-nowrap",
-                               playbackSpeed === speed ? "text-neon-cyan" : "text-gray-400"
-                             )}
-                           >
-                              {speed === 1000 ? 'SLOW' : speed === 500 ? 'NORM' : speed === 200 ? 'FAST' : 'TURBO'}
-                           </button>
-                        ))}
-                       </div>
-                     </div>
+                     {isSpeedMenuOpen && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 flex flex-col bg-[#1a1f2e] border border-white/10 rounded-lg p-1 shadow-xl z-50 min-w-[60px] animate-in fade-in zoom-in duration-200">
+                          {[1000, 500, 200, 50].map((speed) => (
+                              <button 
+                                key={speed}
+                                onClick={() => {
+                                  setPlaybackSpeed(speed);
+                                  setIsSpeedMenuOpen(false);
+                                }}
+                                className={clsx(
+                                  "px-3 py-2 text-[10px] font-mono hover:bg-white/10 rounded transition-colors whitespace-nowrap text-center",
+                                  playbackSpeed === speed ? "text-neon-cyan font-bold bg-white/5" : "text-gray-400"
+                                )}
+                              >
+                                  {speed === 1000 ? 'SLOW' : speed === 500 ? 'NORM' : speed === 200 ? 'FAST' : 'TURBO'}
+                              </button>
+                          ))}
+                        </div>
+                     )}
                   </div>
               </div>
            </div>

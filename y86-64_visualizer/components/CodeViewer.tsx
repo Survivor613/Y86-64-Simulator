@@ -4,7 +4,7 @@ import { clsx } from 'clsx';
 interface CodeViewerProps {
   code: string;
   currentPc: number;
-  onLineClick: (address: number) => void;
+  onLineClick?: (address: number) => void;
 }
 
 const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc, onLineClick }) => {
@@ -36,7 +36,7 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc, onLineClick })
            <div className="w-1.5 h-1.5 bg-neon-purple rounded-full animate-pulse-slow"></div>
            <span className="text-xs font-bold text-gray-400 uppercase tracking-[0.2em] font-mono">Source.yo</span>
         </div>
-        <div className="text-[10px] text-gray-500 font-mono">READ-ONLY</div>
+        <div className="text-[10px] text-gray-500 font-mono">INTERACTIVE</div>
       </div>
       
       {/* Code Area */}
@@ -48,23 +48,27 @@ const CodeViewer: React.FC<CodeViewerProps> = ({ code, currentPc, onLineClick })
         <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:20px_20px] pointer-events-none"></div>
 
         {lines.map((line, idx) => {
-           // Parse address for click functionality
            const match = line.match(/^\s*0x([0-9a-fA-F]+):/);
-           const address = match ? parseInt(match[1], 16) : null;
-           const isAddress = address !== null;
-           
+           const isAddress = !!match;
            const isActive = idx === activeLineIndex;
+           
+           // Extract address for click handler
+           const address = match ? parseInt(match[1], 16) : null;
 
            return (
             <div 
               key={idx} 
-              onClick={() => isAddress && address !== null && onLineClick(address)}
+              onClick={() => {
+                if (isAddress && address !== null && onLineClick) {
+                  onLineClick(address);
+                }
+              }}
               className={clsx(
                 "relative pl-3 pr-4 py-1.5 rounded-r-md transition-all duration-300 border-l-[3px]",
                 isActive 
                   ? "bg-gradient-to-r from-neon-blue/20 to-transparent border-neon-blue shadow-[0_0_15px_rgba(45,226,230,0.1)] z-10 scale-[1.01] origin-left" 
                   : "border-transparent text-gray-600 hover:bg-white/5 hover:text-gray-400",
-                isAddress && !isActive && "cursor-pointer hover:border-l-white/20"
+                isAddress && onLineClick && !isActive && "cursor-pointer hover:border-l-white/20"
               )}
             >
               {/* Active Line Shimmer Bar */}

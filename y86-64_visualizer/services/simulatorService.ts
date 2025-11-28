@@ -1,7 +1,9 @@
-import { SimulationResult, SimulationStep, Stat } from '../types';
+import { SimulationResult, SimulationStep, Stat, RegisterMap, MemoryMap, CCMapping } from '../types';
+import { INITIAL_REGISTERS, REGISTER_ORDER } from '../constants';
 
 // --- CONSTANTS & ENUMS (Internal to Simulation) ---
-const MAX_MEM_SIZE = 0x20000; // 128KB memory space for simulation
+const MAX_MEM_SIZE = 0x20000; // 128KB memory space
+const MAX_STEPS = 10000;
 
 enum RegID {
   RAX = 0, RCX = 1, RDX = 2, RBX = 3, RSP = 4, RBP = 5, RSI = 6, RDI = 7,
@@ -75,7 +77,7 @@ class Memory {
   writeWord(addr: number, val: bigint): boolean {
     if (addr < 0 || addr > MAX_MEM_SIZE - 8) return true;
     for (let i = 0; i < 8; i++) {
-      // Little endian: take lowest 8 bits, shift right
+      // Little endian: take lowest 8 bits
       const byte = Number((val >> BigInt(i * 8)) & 0xFFn);
       this.data[addr + i] = byte;
     }
@@ -92,10 +94,7 @@ class Memory {
       // Little endian: shift left and OR
       value |= (byte << BigInt(i * 8));
     }
-    // Handle unsigned to signed conversion if necessary (standard Y86 usually treats memory as raw bits)
-    // We treat readWord as returning raw 64-bit block.
-    // However, JS BitInts are arbitrary precision. To simulate 64-bit unsigned read:
-    value = BigInt.asUintN(64, value);
+    value = BigInt.asUintN(64, value); // Ensure unsigned 64-bit interpretation
     return { val: value, error: false };
   }
 }
@@ -146,7 +145,7 @@ class CPU {
 
     if (this.icode === ICode.HALT) {
       this.stat = Stat.HLT;
-      this.valP = this.PC; // Don't advance
+      this.valP = this.PC;
       return true;
     }
 
@@ -178,15 +177,12 @@ class CPU {
     let srcA = RegID.NONE;
     let srcB = RegID.NONE;
 
-    if ([ICode.RRMOVQ, ICode.RMMOVQ, ICode.OPQ, ICode.PUSHQ].includes(this.icode)) {
+    // Aligned strictly with C++ decode logic
+    if ([ICode.HALT, ICode.NOP, ICode.RRMOVQ, ICode.IRMOVQ, ICode.RMMOVQ, ICode.MRMOVQ, ICode.OPQ].includes(this.icode)) {
       srcA = this.rA;
-    } else if ([ICode.POPQ, ICode.RET].includes(this.icode)) {
-      srcA = RegID.RSP;
-    }
-
-    if ([ICode.RRMOVQ, ICode.IRMOVQ, ICode.RMMOVQ, ICode.MRMOVQ, ICode.OPQ].includes(this.icode)) {
       srcB = this.rB;
     } else if ([ICode.PUSHQ, ICode.POPQ, ICode.CALL, ICode.RET].includes(this.icode)) {
+      srcA = this.rA;
       srcB = RegID.RSP;
     }
 
@@ -202,6 +198,7 @@ class CPU {
     let aluB = 0n;
     let op = AluOp.ADD;
 
+    // Aligned strictly with C++ setALU logic
     switch (this.icode) {
       case ICode.RRMOVQ: aluA = this.valA; aluB = 0n; break;
       case ICode.IRMOVQ: aluA = this.valC; aluB = 0n; break;
@@ -212,9 +209,11 @@ class CPU {
       case ICode.POPQ:   aluA = 8n;        aluB = this.valB; break;
       case ICode.CALL:   aluA = -8n;       aluB = this.valB; break;
       case ICode.RET:    aluA = 8n;        aluB = this.valB; break;
+      default:           aluA = 0n;        aluB = 0n; break;
     }
 
-    // Exec ALU
+    // execALU
+    // Convert to signed integers for arithmetic
     const a = BigInt.asIntN(64, aluA);
     const b = BigInt.asIntN(64, aluB);
     let r = 0n;
@@ -226,17 +225,19 @@ class CPU {
       case AluOp.XOR: r = b ^ a; break;
     }
 
-    this.valE = BigInt.asIntN(64, r);
+    this.valE = BigInt.asUintN(64, r); // Keep internal valE as unsigned representation of result
 
-    // Set CC
+    // setCC
     if (this.icode === ICode.OPQ) {
-      this.cc.zf = (this.valE === 0n);
-      this.cc.sf = (this.valE < 0n);
+      const signedE = BigInt.asIntN(64, this.valE);
+      
+      this.cc.zf = (signedE === 0n);
+      this.cc.sf = (signedE < 0n);
       
       if (op === AluOp.ADD) {
-        this.cc.of = (a > 0n && b > 0n && this.valE < 0n) || (a < 0n && b < 0n && this.valE > 0n);
+        this.cc.of = (a > 0n && b > 0n && signedE < 0n) || (a < 0n && b < 0n && signedE > 0n);
       } else if (op === AluOp.SUB) {
-        this.cc.of = (a < 0n && b > 0n && this.valE < 0n) || (a > 0n && b < 0n && this.valE > 0n);
+        this.cc.of = (a < 0n && b > 0n && signedE < 0n) || (a > 0n && b < 0n && signedE > 0n);
       } else {
         this.cc.of = false;
       }
@@ -246,33 +247,44 @@ class CPU {
   }
 
   memory_stage(): boolean {
+    const addrE = Number(BigInt.asUintN(64, this.valE));
+
     switch (this.icode) {
       case ICode.RMMOVQ:
       case ICode.PUSHQ:
-      case ICode.CALL: {
-        const addr = Number(BigInt.asUintN(64, this.valE));
-        if (this.mem.writeWord(addr, this.valA)) {
+        // M[valE] ← valA
+        if (this.mem.writeWord(addrE, this.valA)) {
           this.stat = Stat.ADR; return false;
         }
         break;
-      }
+      
+      case ICode.CALL:
+        // M[valE] ← valP (CRITICAL FIX: Write return address, not valA)
+        if (this.mem.writeWord(addrE, BigInt(this.valP))) {
+          this.stat = Stat.ADR; return false;
+        }
+        break;
+
       case ICode.MRMOVQ: {
-        const addr = Number(BigInt.asUintN(64, this.valE));
-        const res = this.mem.readWord(addr);
+        const res = this.mem.readWord(addrE);
         if (res.error) { this.stat = Stat.ADR; return false; }
         this.valM = res.val;
         break;
       }
+      
       case ICode.POPQ: {
-         const readAddr = Number(BigInt.asUintN(64, this.valB));
-         const res = this.mem.readWord(readAddr);
+         // valM ← M[valB]
+         const addrB = Number(BigInt.asUintN(64, this.valB));
+         const res = this.mem.readWord(addrB);
          if (res.error) { this.stat = Stat.ADR; return false; }
          this.valM = res.val;
          break;
       }
+      
       case ICode.RET: {
-        const addr = Number(BigInt.asUintN(64, this.valB));
-        const res = this.mem.readWord(addr);
+        // valM ← M[valB]
+        const addrB = Number(BigInt.asUintN(64, this.valB));
+        const res = this.mem.readWord(addrB);
         if (res.error) { this.stat = Stat.ADR; return false; }
         this.valM = res.val;
         break;
@@ -316,118 +328,114 @@ class CPU {
     if (this.stat !== Stat.AOK) return;
 
     if (this.icode === ICode.JXX) {
-      this.PC = this.cond() ? Number(BigInt.asUintN(64, this.valC)) : this.valP;
+      if (this.cond()) {
+        this.PC = Number(BigInt.asUintN(64, this.valC));
+        return;
+      }
     } else if (this.icode === ICode.CALL) {
       this.PC = Number(BigInt.asUintN(64, this.valC));
+      return;
     } else if (this.icode === ICode.RET) {
       this.PC = Number(BigInt.asUintN(64, this.valM));
-    } else {
-      this.PC = this.valP;
+      return;
     }
+
+    this.PC = this.valP;
   }
 
   step() {
     if (this.stat === Stat.AOK) {
-      if (!this.fetch()) return;
-      this.decode();
-      this.execute();
-      if (!this.memory_stage()) return;
-      this.writeback();
-      this.updatePC();
+      if (this.fetch() && this.decode() && this.execute() && this.memory_stage() && this.writeback()) {
+        this.updatePC();
+      }
     }
   }
 }
 
 // --- LOADER ---
-class Loader {
-  static load(content: string, mem: Memory): boolean {
-    const lines = content.split('\n');
-    let hasContent = false;
 
-    for (const line of lines) {
-      const match = line.match(/^\s*0x([0-9a-fA-F]+)\s*:\s*([0-9a-fA-F]+)/);
-      if (match) {
-        const addrStr = match[1];
-        const dataStr = match[2];
-        let addr = parseInt(addrStr, 16);
-        
-        for (let i = 0; i < dataStr.length; i += 2) {
-          const byteVal = parseInt(dataStr.substring(i, i + 2), 16);
-          if (mem.writeByte(addr, byteVal)) {
-            console.error("Loader error: Out of bounds");
-            return false;
-          }
-          addr++;
+const loadProgram = (content: string, mem: Memory): boolean => {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    // Look for patterns like: "  0x014: 30f40001000000000000 | irmovq $256, %rsp"
+    // Regex matches 0x(ADDR): (HEXDATA)
+    const match = line.match(/^\s*0x([0-9a-fA-F]+)\s*:\s*([0-9a-fA-F]+)/);
+    if (match) {
+      const addrStr = match[1];
+      const dataStr = match[2];
+      let addr = parseInt(addrStr, 16);
+      
+      // Parse hex string into bytes
+      for (let i = 0; i < dataStr.length; i += 2) {
+        const byteHex = dataStr.substring(i, i + 2);
+        const byteVal = parseInt(byteHex, 16);
+        if (mem.writeByte(addr, byteVal)) {
+           return false; // Load error (out of bounds)
         }
-        hasContent = true;
+        addr++;
       }
     }
-    return hasContent;
   }
-}
+  return true;
+};
 
-// --- MAIN SIMULATION FUNCTION ---
+// --- SIMULATION RUNNER ---
+
+const captureState = (cpu: CPU): SimulationStep => {
+  // Convert Registers
+  const regs: RegisterMap = {};
+  REGISTER_ORDER.forEach((name, idx) => {
+    regs[name] = Number(cpu.reg.getReg(idx));
+  });
+
+  // Convert Memory (only non-zero)
+  const memMap: MemoryMap = {};
+  // Optimization: In a real sparse memory, iterate known blocks. 
+  // Here we scan checking for non-zero to match main.cpp output style.
+  // Displaying 128KB is too much, so we stick to the provided example logic:
+  // "step through every 8 bytes"
+  for (let i = 0; i < MAX_MEM_SIZE; i += 8) {
+    const w = cpu.mem.readWord(i);
+    if (!w.error && w.val !== 0n) {
+      memMap[i.toString()] = Number(w.val);
+    }
+  }
+
+  return {
+    PC: cpu.PC,
+    STAT: cpu.stat,
+    REG: regs,
+    CC: { ZF: cpu.cc.zf ? 1 : 0, SF: cpu.cc.sf ? 1 : 0, OF: cpu.cc.of ? 1 : 0 },
+    MEM: memMap
+  };
+};
+
 export const runSimulation = async (file: File): Promise<SimulationResult> => {
-  const content = await file.text();
+  const text = await file.text();
   
   const mem = new Memory();
   const cpu = new CPU(mem);
 
-  const loaded = Loader.load(content, mem);
-  if (!loaded) {
-    throw new Error("Failed to load .yo file");
+  // Load Program
+  if (!loadProgram(text, mem)) {
+    throw new Error("Failed to load program");
   }
 
-  const stepsData: SimulationStep[] = [];
-  const MAX_STEPS = 10000;
-  let steps = 0;
+  const steps: SimulationStep[] = [];
+  let cycle = 0;
 
-  // Helper to snapshot state exactly like main.cpp :: printStateJSON
-  const captureState = (cpu: CPU): SimulationStep => {
-    // Registers
-    const regNames = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", 
-                      "r8", "r9", "r10", "r11", "r12", "r13", "r14"];
-    const regMap: Record<string, number> = {};
-    for (let i = 0; i < 15; i++) {
-        regMap[regNames[i]] = Number(cpu.reg.getReg(i)); 
-    }
+  // 1. Capture Initial State (Before any execution)
+  steps.push(captureState(cpu));
 
-    // Memory (Non-zero only)
-    const memMap: Record<string, number> = {};
-    for (let i = 0; i < MAX_MEM_SIZE; i += 8) {
-        const res = cpu.mem.readWord(i);
-        if (!res.error && res.val !== 0n) {
-            memMap[i.toString()] = Number(res.val);
-        }
-    }
-
-    return {
-        PC: cpu.PC,
-        STAT: cpu.stat,
-        REG: regMap,
-        CC: {
-            ZF: cpu.cc.zf ? 1 : 0,
-            SF: cpu.cc.sf ? 1 : 0,
-            OF: cpu.cc.of ? 1 : 0
-        },
-        MEM: memMap
-    };
-  };
-
-  // --- CRITICAL CHANGE ---
-  // Capture initial state (Step 0) BEFORE execution loop
-  // This ensures the visualizer starts at PC=0 (or entry point)
-  stepsData.push(captureState(cpu));
-
-  // Run loop
-  while (cpu.stat === Stat.AOK && steps < MAX_STEPS) {
+  // 2. Run Loop
+  while (cpu.stat === Stat.AOK && cycle < MAX_STEPS) {
     cpu.step();
-    steps++;
-    stepsData.push(captureState(cpu));
+    cycle++;
+    steps.push(captureState(cpu));
   }
 
   return {
-    steps: stepsData,
-    sourceCode: content
+    steps: steps,
+    sourceCode: text
   };
 };
